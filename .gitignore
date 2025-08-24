@@ -1,0 +1,16 @@
+# Ignore dependencies inside frontend
+frontend/node_modules/
+
+# Ignore build outputs
+frontend/build/
+frontend/dist/
+
+# Ignore environment files
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Logs
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
