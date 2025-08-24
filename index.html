@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Data Analyst</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.263.1/lucide.min.css">
+</head>
+<body>
+    <!-- Auth Page -->
+    <div id="auth-page" class="page active">
+        <div class="auth-background">
+            <div class="auth-decorations">
+                <div class="decoration decoration-1"></div>
+                <div class="decoration decoration-2"></div>
+                <div class="decoration decoration-3"></div>
+            </div>
+            
+            <div class="auth-card">
+                <div class="auth-header">
+                    <h1 id="auth-title">Welcome Back</h1>
+                    <p id="auth-subtitle">Sign in to your AI Data Analyst account</p>
+                </div>
+                
+                <form id="auth-form" class="auth-form">
+                    <div id="name-fields" class="name-fields" style="display: none;">
+                        <div class="form-group half">
+                            <label for="firstName">First Name</label>
+                            <input type="text" id="firstName" placeholder="John">
+                        </div>
+                        <div class="form-group half">
+                            <label for="lastName">Last Name</label>
+                            <input type="text" id="lastName" placeholder="Doe">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="email">Email Address</label>
+                        <input type="email" id="email" placeholder="Enter your email" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" placeholder="Enter your password" required>
+                        <small id="password-hint" style="display: none;">Minimum 6 characters required</small>
+                    </div>
+                    
+                    <button type="submit" class="auth-button" id="auth-submit">Sign In</button>
+                    
+                    <button type="button" class="toggle-auth" id="toggle-auth">
+                        Don't have an account? Sign up
+                    </button>
+                </form>
+                
+                
+            </div>
+        </div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard-page" class="page">
+        <div class="dashboard-layout">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h1>AI Data Analyst</h1>
+                    
+                </div>
+                
+                <nav class="sidebar-nav">
+                    <button class="nav-item active" data-section="upload">
+                        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                            <polyline points="14,2 14,8 20,8"/>
+                            <path d="M12 18v-6"/>
+                            <path d="m9 15 3-3 3 3"/>
+                        </svg>
+                        Upload Dataset
+                    </button>
+                    
+                    <button class="nav-item" data-section="query">
+                        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"/>
+                            <path d="M9 9h6"/>
+                            <path d="M9 15h6"/>
+                        </svg>
+                        Ask Question
+                    </button>
+                    
+                    <button class="nav-item" data-section="history">
+                        <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                            <path d="M3 3v5h5"/>
+                            <path d="M12 7v5l4 2"/>
+                        </svg>
+                        View History
+                    </button>
+                </nav>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Header -->
+                <header class="main-header">
+                    <h2 id="page-title">Dashboard</h2>
+                    <div class="header-actions">
+                        <span class="user-email">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            <span id="current-user-email">user@example.com</span>
+                        </span>
+                        <button class="logout-btn" id="logout-btn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                                <polyline points="16 17 21 12 16 7"/>
+                                <line x1="21" y1="12" x2="9" y2="12"/>
+                            </svg>
+                            Logout
+                        </button>
+                    </div>
+                </header>
+
+                <!-- Content Sections -->
+                <div class="content-area">
+                    <!-- Upload Section -->
+                    <section id="upload-section" class="content-section active">
+                        <div class="welcome-content">
+                            <h1>Welcome to AI Data Analyst</h1>
+                            <p>Upload a CSV dataset and start querying in plain English. Our AI will translate your questions into SQL and provide insights.</p>
+                        </div>
+                        
+                        <div class="upload-card">
+                            <div class="upload-header">
+                                <h3>
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                        <polyline points="14,2 14,8 20,8"/>
+                                        <path d="M12 18v-6"/>
+                                        <path d="m9 15 3-3 3 3"/>
+                                    </svg>
+                                    Upload Dataset
+                                </h3>
+                                <p>Drag and drop your CSV file or click to browse</p>
+                            </div>
+                            
+                            <div class="dropzone" id="dropzone">
+                                <input type="file" id="file-input" accept=".csv" style="display: none;">
+                                <div class="dropzone-content">
+                                    <svg class="dropzone-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                                        <polyline points="14,2 14,8 20,8"/>
+                                    </svg>
+                                    <h4>Drop your CSV file here</h4>
+                                    <p>Supports files up to 100MB</p>
+                                    <button type="button" class="browse-btn">Browse Files</button>
+                                </div>
+                            </div>
+                            
+                            <div class="progress-section" id="progress-section" style="display: none;">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="progress-fill"></div>
+                                </div>
+                                <p class="progress-text" id="progress-text">Uploading... 0%</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Query Section -->
+                    <section id="query-section" class="content-section">
+                        <div class="section-header">
+                            <h1>Ask Questions</h1>
+                            <p>Ask questions about your data in plain English. Our AI will analyze your dataset and provide insights.</p>
+                        </div>
+                        
+                        <div class="dataset-info" id="dataset-info" style="display: none;">
+                            <div class="dataset-details">
+                                <h3 id="dataset-name">Sample Dataset.csv</h3>
+                                <p class="dataset-meta">
+                                    <span id="dataset-rows">1,234</span> rows • 
+                                    <span id="dataset-columns">8</span> columns • 
+                                    Uploaded <span id="dataset-date">Dec 24, 2025</span>
+                                </p>
+                            </div>
+                            <button class="preview-btn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                    <circle cx="12" cy="12" r="3"/>
+                                </svg>
+                                Preview Data
+                            </button>
+                        </div>
+                        
+                        <div class="query-form">
+                            <form id="question-form">
+                                <label for="question-input">What would you like to know?</label>
+                                <div class="question-input-group">
+                                    <input type="text" id="question-input" placeholder="e.g., What are the top 5 products by sales?">
+                                    <button type="submit" id="ask-btn">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <line x1="22" y1="2" x2="11" y2="13"/>
+                                            <polygon points="22,2 15,22 11,13 2,9"/>
+                                        </svg>
+                                        Ask
+                                    </button>
+                                </div>
+                                
+                                <div class="suggestions">
+                                    <span>Suggestions:</span>
+                                    <button type="button" class="suggestion-btn">Show me the top 10 records</button>
+                                    <button type="button" class="suggestion-btn">What are the summary statistics?</button>
+                                    <button type="button" class="suggestion-btn">Group data by category and show totals</button>
+                                    <button type="button" class="suggestion-btn">Find records with missing values</button>
+                                </div>
+                            </form>
+                        </div>
+                        
+                        <div class="results-section" id="results-section" style="display: none;">
+                            <div class="results-header">
+                                <h3>Results</h3>
+                                <span class="status-badge" id="status-badge">success</span>
+                            </div>
+                            
+                            <div class="ai-explanation" id="ai-explanation" style="display: none;">
+                                <p><strong>AI Analysis:</strong> <span id="explanation-text"></span></p>
+                            </div>
+                            
+                            <div class="sql-section" id="sql-section" style="display: none;">
+                                <p class="sql-label">Generated SQL:</p>
+                                <code id="sql-code"></code>
+                            </div>
+                            
+                            <div class="results-table" id="results-table"></div>
+                        </div>
+                    </section>
+
+                    <!-- History Section -->
+                    <section id="history-section" class="content-section">
+                        <div class="section-header">
+                            <div>
+                                <h1>Query History</h1>
+                                <p>View and replay your previous queries</p>
+                            </div>
+                            <div class="query-count">
+                                <span id="total-queries">0</span> queries
+                            </div>
+                        </div>
+                        
+                        <div class="history-controls">
+                            <div class="search-group">
+                                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"/>
+                                    <path d="M21 21l-4.35-4.35"/>
+                                </svg>
+                                <input type="text" id="search-queries" placeholder="Search queries...">
+                            </div>
+                            <div class="filter-buttons">
+                                <button class="filter-btn active" data-filter="all">All</button>
+                                <button class="filter-btn" data-filter="success">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                        <polyline points="22,4 12,14.01 9,11.01"/>
+                                    </svg>
+                                    Success
+                                </button>
+                                <button class="filter-btn" data-filter="error">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 9v4"/>
+                                        <path d="M12 17h.01"/>
+                                        <path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9z"/>
+                                    </svg>
+                                    Error
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="history-list" id="history-list">
+                            <div class="empty-state">
+                                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                                    <path d="M3 3v5h5"/>
+                                    <path d="M12 7v5l4 2"/>
+                                </svg>
+                                <h3>No query history yet</h3>
+                                <p>Start by uploading a dataset and asking your first question</p>
+                                <button class="upload-btn" onclick="switchSection('upload')">Upload Dataset</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
