@@ -34,7 +34,10 @@ function Dashboard({ currentUser, setCurrentUser }) {
             </button>
             <button
               className={`nav-item ${section === "query" ? "active" : ""}`}
-              onClick={() => setSection("query")}
+              onClick={() => {
+                if (dataset) setSection("query");
+                else alert("Please upload a dataset first.");
+              }}
             >
               Ask Question
             </button>
@@ -66,7 +69,12 @@ function Dashboard({ currentUser, setCurrentUser }) {
           </header>
 
           <div className="content-area">
-            {section === "upload" && <UploadSection setDataset={setDataset} />}
+            {section === "upload" && (
+              <UploadSection
+                setDataset={setDataset}
+                onUploadComplete={() => setSection("query")}
+              />
+            )}
             {section === "query" && (
               <QuerySection dataset={dataset} addQuery={addQuery} />
             )}

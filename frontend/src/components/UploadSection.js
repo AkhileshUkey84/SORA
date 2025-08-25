@@ -1,6 +1,7 @@
 import React, { useState } from "react";
+import Papa from "papaparse";
 
-function UploadSection({ setDataset }) {
+function UploadSection({ setDataset, onUploadComplete }) {
   const [progress, setProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
 
@@ -17,27 +18,43 @@ function UploadSection({ setDataset }) {
     setUploading(true);
     let progressVal = 0;
 
-    const interval = setInterval(() => {
-      progressVal += 20;
-      setProgress(progressVal);
-      if (progressVal >= 100) {
-        clearInterval(interval);
-        setTimeout(() => {
-          setDataset({
-            name: file.name,
-            rows: Math.floor(Math.random() * 10000) + 100,
-            columns: Math.floor(Math.random() * 15) + 5,
-            uploadDate: new Date().toLocaleDateString(),
-          });
-          setUploading(false);
-          setProgress(0);
-        }, 1000);
-      }
-    }, 300);
-  };
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const fileContent = e.target.result;
 
-  const onFileChange = (e) => {
-    if (e.target.files.length > 0) handleFile(e.target.files[0]);
+      // Parse CSV content into array of objects
+      const parsedData = Papa.parse(fileContent, {
+        header: true,       // use first row as keys
+        skipEmptyLines: true,
+      }).data;
+
+      const interval = setInterval(() => {
+        progressVal += 20;
+        setProgress(progressVal);
+
+        if (progressVal >= 100) {
+          clearInterval(interval);
+          setTimeout(() => {
+            const dataset = {
+              name: file.name,
+              rows: parsedData.length,
+              columns: parsedData[0] ? Object.keys(parsedData[0]).length : 0,
+              uploadDate: new Date().toLocaleDateString(),
+              data: parsedData, // structured data ready for querying
+            };
+
+            setDataset(dataset);
+            setUploading(false);
+            setProgress(0);
+
+            // Switch to QuerySection
+            onUploadComplete();
+          }, 500);
+        }
+      }, 300);
+    };
+
+    reader.readAsText(file);
   };
 
   return (
@@ -62,7 +79,9 @@ function UploadSection({ setDataset }) {
             id="file-input"
             accept=".csv"
             style={{ display: "none" }}
-            onChange={onFileChange}
+            onChange={(e) =>
+              e.target.files.length > 0 && handleFile(e.target.files[0])
+            }
           />
           <div className="dropzone-content">
             <h4>Drop your CSV file here</h4>
