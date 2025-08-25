@@ -36,8 +36,14 @@ We are **Team SORA**, participating in **Kurukshetra 2025**, under the **AI and 
 ```bash
 # Clone the repository
 git clone https://github.com/<your-repo>.git
-cd sora
+cd SORA
 
+# Backend
+
+cd .\backend\
+pip install -r .\requirements.txt
+
+python main.py
 # Install dependencies
 npm install   # for frontend/backend (adjust if separate folders)
 
