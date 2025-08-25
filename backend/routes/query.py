@@ -102,3 +102,57 @@ async def analyze_query(
             error=f"Query processing failed: {str(e)}",
             narrative="I encountered an issue processing your request. Please try rephrasing your question."
         )
+
+
+@router.post("/report")
+async def generate_report(
+    request: Request,
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    _: None = Depends(rate_limit_check)
+):
+    """
+    Generates executive summary report for a session.
+    Uses ReportAgent to analyze session history and create insights.
+    """
+    
+    try:
+        # Get orchestrator from app state
+        if hasattr(request.app.state, 'orchestrator'):
+            orchestrator = request.app.state.orchestrator
+        else:
+            return {
+                "success": False,
+                "error": "Service not available"
+            }
+        
+        # Initialize agents if needed
+        if not orchestrator._agents_initialized:
+            orchestrator._initialize_agents()
+        
+        # Generate report using ReportAgent
+        report_result = await orchestrator.report_agent.generate_session_report(
+            session_id=session_id,
+            user_id=current_user.get("id")
+        )
+        
+        if not report_result.success:
+            return {
+                "success": False,
+                "error": report_result.error or "Failed to generate report"
+            }
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "report": report_result.data
+        }
+        
+    except Exception as e:
+        logger.error("Report generation failed",
+                    session_id=session_id,
+                    error=str(e))
+        return {
+            "success": False,
+            "error": "Failed to generate report"
+        }

@@ -25,8 +25,8 @@ class SQLGeneratorAgent(BaseAgent):
         
     async def process(self, context: AgentContext, **kwargs) -> AgentResult:
         """
-        Generates SQL from natural language with schema awareness.
-        Uses few-shot prompting for consistent, safe SQL generation.
+        Generates SQL from natural language with strict schema adherence.
+        Implements pre-flight validation to prevent type mismatches.
         """
         
         # Get table schema for the dataset
@@ -37,14 +37,24 @@ class SQLGeneratorAgent(BaseAgent):
                 error=f"Dataset {context.dataset_id} not found"
             )
         
+        # STEP 1: Pre-flight analysis - detect potential type mismatches
+        pre_flight_check = self._analyze_query_requirements(context.query, schema)
+        if not pre_flight_check['valid']:
+            return AgentResult(
+                success=False,
+                error=pre_flight_check['user_friendly_error'],
+                data={"suggested_alternative": pre_flight_check.get('suggestion')}
+            )
+        
         # Get conversation context if available
         conv_context = context.metadata.get("conversation_context", {})
         
-        # Build the prompt with schema and examples
+        # Build the prompt with enhanced schema and examples
         prompt = self._build_generation_prompt(
             query=context.query,
             schema=schema,
-            conversation_context=conv_context
+            conversation_context=conv_context,
+            pre_flight_hints=pre_flight_check.get('hints', [])
         )
         
         # Generate SQL using LLM
@@ -67,7 +77,16 @@ class SQLGeneratorAgent(BaseAgent):
                     error="Failed to generate valid SQL"
                 )
             
-            # Basic validation
+            # STEP 1: Strict schema validation
+            schema_validation = self._validate_sql_against_schema(sql, schema)
+            if not schema_validation['valid']:
+                return AgentResult(
+                    success=False,
+                    error=schema_validation['user_friendly_error'],
+                    data={"suggested_fix": schema_validation.get('suggestion')}
+                )
+            
+            # Basic security validation
             if not self._is_select_only(sql):
                 return AgentResult(
                     success=False,
@@ -76,7 +95,11 @@ class SQLGeneratorAgent(BaseAgent):
             
             return AgentResult(
                 success=True,
-                data={"sql": sql, "raw_response": response},
+                data={
+                    "sql": sql, 
+                    "raw_response": response,
+                    "schema_validation": schema_validation
+                },
                 confidence=0.9 if conv_context else 0.95
             )
             
@@ -88,7 +111,8 @@ class SQLGeneratorAgent(BaseAgent):
             )
     
     def _build_generation_prompt(self, query: str, schema: Dict[str, Any],
-                               conversation_context: Dict[str, Any]) -> str:
+                               conversation_context: Dict[str, Any], 
+                               pre_flight_hints: List[str] = None) -> str:
         """
         Constructs a comprehensive prompt with schema context and examples.
         Designed to maximize accuracy and minimize hallucination.
@@ -239,3 +263,118 @@ SQL:"""
                 return False
         
         return True
+    
+    def _analyze_query_requirements(self, query: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        STEP 1: Pre-flight analysis to detect type mismatches before SQL generation.
+        Prevents generating invalid queries by analyzing intent vs. schema.
+        """
+        query_lower = query.lower()
+        columns = {col['name'].lower(): col for col in schema['columns']}
+        table_name = schema['table_name']
+        
+        # Detect aggregation requests
+        agg_functions = ['sum', 'average', 'avg', 'total', 'mean']
+        wants_aggregation = any(func in query_lower for func in agg_functions)
+        
+        if wants_aggregation:
+            # Find numeric columns that can be aggregated
+            numeric_cols = [col for col in schema['columns'] 
+                          if col.get('semantic_type') == 'numeric' or 
+                             col['type'].lower() in ['integer', 'bigint', 'double', 'float', 'decimal', 'numeric']]
+            
+            # Check if query mentions specific column names that might not be numeric
+            mentioned_cols = []
+            for col_name in columns.keys():
+                if col_name in query_lower or col_name.replace('_', ' ') in query_lower:
+                    mentioned_cols.append(columns[col_name])
+            
+            # Validate mentioned columns for aggregation
+            for col in mentioned_cols:
+                if col['type'].lower() in ['varchar', 'text', 'string'] and not col.get('aggregable', False):
+                    return {
+                        'valid': False,
+                        'user_friendly_error': f"I can't calculate a {agg_functions[0] if agg_functions[0] in query_lower else 'sum'} for the '{col['name']}' column because it contains text, not numbers. Would you like me to count the occurrences instead?",
+                        'suggestion': f"Try asking: 'How many different {col['name']} values are there?' or 'Count by {col['name']}'"
+                    }
+        
+        # Detect year-over-year or time comparison requests
+        if any(pattern in query_lower for pattern in ['year over year', 'yoy', 'compare', 'vs previous', 'trend']):
+            date_cols = [col for col in schema['columns'] if 'date' in col['name'].lower() or 'time' in col['name'].lower()]
+            if not date_cols:
+                return {
+                    'valid': False,
+                    'user_friendly_error': "I can't perform time-based comparisons because this dataset doesn't have date columns. Would you like to see a different type of analysis?",
+                    'suggestion': "Try: 'Show me the data breakdown by category' or 'What are the top values?'"
+                }
+        
+        return {
+            'valid': True,
+            'hints': []
+        }
+    
+    def _validate_sql_against_schema(self, sql: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        STEP 1: Strict post-generation schema validation.
+        Catches any SQL that references non-existent columns or invalid operations.
+        """
+        import re
+        
+        sql_upper = sql.upper()
+        columns = {col['name']: col for col in schema['columns']}
+        column_names = set(columns.keys())
+        table_name = schema['table_name']
+        
+        # Check table name usage
+        if table_name.lower() not in sql.lower():
+            return {
+                'valid': False,
+                'user_friendly_error': f"The generated query doesn't use the correct table name. Expected '{table_name}' but it may be missing or incorrect.",
+                'suggestion': f"The query should reference table '{table_name}'"
+            }
+        
+        # Extract column references from SQL
+        # This regex finds column names after SELECT, WHERE, GROUP BY, ORDER BY
+        col_pattern = r'(?:SELECT|FROM|WHERE|GROUP BY|ORDER BY|HAVING)\s+(?:[^\s,()]+\.)?([a-zA-Z_][a-zA-Z0-9_]*)'  
+        referenced_columns = set(re.findall(col_pattern, sql, re.IGNORECASE))
+        
+        # Also check for columns in function calls like SUM(column_name)
+        func_pattern = r'(?:SUM|AVG|COUNT|MAX|MIN)\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)'
+        function_columns = set(re.findall(func_pattern, sql, re.IGNORECASE))
+        referenced_columns.update(function_columns)
+        
+        # Remove common SQL keywords that might be captured
+        sql_keywords = {'SELECT', 'FROM', 'WHERE', 'GROUP', 'ORDER', 'BY', 'AS', 'AND', 'OR', 'COUNT', 'SUM', 'AVG', 'LIMIT'}
+        referenced_columns = {col for col in referenced_columns if col.upper() not in sql_keywords}
+        
+        # Check for non-existent columns
+        invalid_columns = referenced_columns - column_names
+        if invalid_columns:
+            invalid_col = list(invalid_columns)[0]
+            # Suggest similar column names
+            suggestions = [col for col in column_names if col.lower().startswith(invalid_col.lower()[:3])]
+            suggestion_text = f"Did you mean: {', '.join(suggestions[:3])}?" if suggestions else "Check the available column names."
+            
+            return {
+                'valid': False,
+                'user_friendly_error': f"The column '{invalid_col}' doesn't exist in the dataset. {suggestion_text}",
+                'suggestion': f"Available columns include: {', '.join(list(column_names)[:5])}..."
+            }
+        
+        # Validate aggregation functions on appropriate column types
+        agg_matches = re.findall(r'(SUM|AVG)\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)', sql, re.IGNORECASE)
+        for func, col_name in agg_matches:
+            if col_name in columns:
+                col = columns[col_name]
+                if col['type'].lower() in ['varchar', 'text', 'string'] and not col.get('aggregable', False):
+                    return {
+                        'valid': False,
+                        'user_friendly_error': f"I can't calculate {func.lower()} on '{col_name}' because it contains text values, not numbers. Would you like me to count them instead?",
+                        'suggestion': f"Try: 'COUNT({col_name})' or 'COUNT(*)' to count occurrences"
+                    }
+        
+        return {
+            'valid': True,
+            'validated_columns': list(referenced_columns),
+            'table_name': table_name
+        }

@@ -5,9 +5,10 @@ Audit agent that validates results through counterfactual analysis.
 Builds trust by transparently checking result accuracy.
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from agents.base import BaseAgent, AgentContext, AgentResult
 from services.database_service import DatabaseService
+from pydantic import BaseModel, Field
 import pandas as pd
 import numpy as np
 import hashlib
@@ -15,6 +16,79 @@ import json
 import re
 from datetime import datetime
 from scipy import stats
+from enum import Enum
+
+
+class ValidationStatus(str, Enum):
+    """Status levels for validation results"""
+    PASSED = "passed"
+    WARNING = "warning"
+    ERROR = "error"
+    SKIPPED = "skipped"
+    INFO = "info"
+
+
+class CounterfactualTest(BaseModel):
+    """Represents a single counterfactual validation test"""
+    test_type: str
+    description: str
+    original_hypothesis: str
+    counterfactual_hypothesis: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    status: ValidationStatus
+    evidence: Dict[str, Any] = {}
+    execution_time_ms: Optional[float] = None
+    row_citations: List[str] = []  # Specific rows that support/contradict the hypothesis
+
+
+class EvidenceTracker(BaseModel):
+    """Tracks evidence for audit conclusions with row-level citations"""
+    insight: str
+    supporting_evidence: List[str] = []
+    contradicting_evidence: List[str] = []
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    data_provenance: Dict[str, Any] = {}  # Where this evidence comes from
+    statistical_significance: Optional[float] = None
+    business_impact: Optional[str] = None
+
+
+class CounterfactualEngine(BaseModel):
+    """Advanced counterfactual validation engine"""
+    tests_performed: List[CounterfactualTest] = []
+    overall_confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    evidence_tracker: List[EvidenceTracker] = []
+    reproducibility_hash: Optional[str] = None
+    validation_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    def add_test(self, test: CounterfactualTest) -> None:
+        """Add a counterfactual test result"""
+        self.tests_performed.append(test)
+        self._update_confidence()
+    
+    def _update_confidence(self) -> None:
+        """Update overall confidence based on test results"""
+        if not self.tests_performed:
+            self.overall_confidence = 0.5
+            return
+        
+        # Weight tests by importance
+        weights = {
+            "aggregation_consistency": 2.0,
+            "inverted_filter": 1.8,
+            "boundary_validation": 1.5,
+            "sample_consistency": 1.2,
+            "outlier_detection": 1.0
+        }
+        
+        total_weight = 0
+        weighted_sum = 0
+        
+        for test in self.tests_performed:
+            weight = weights.get(test.test_type, 1.0)
+            weighted_sum += test.confidence * weight
+            total_weight += weight
+        
+        self.overall_confidence = weighted_sum / total_weight if total_weight > 0 else 0.5
 
 
 class AuditAgent(BaseAgent):
@@ -27,6 +101,11 @@ class AuditAgent(BaseAgent):
         super().__init__("AuditAgent")
         self.db = db_service
         self.audit_strategies = self._initialize_strategies()
+        
+        # Enhanced intelligence features
+        self.counterfactual_engine = None  # Initialized per query
+        self.confidence_threshold = 0.7  # Minimum confidence for auto-pass
+        self.evidence_weight = 0.8  # How much evidence impacts confidence
     
     async def process(self, context: AgentContext, **kwargs) -> AgentResult:
         """
@@ -112,13 +191,20 @@ class AuditAgent(BaseAgent):
         }
     
     def _analyze_query(self, sql: str) -> Dict[str, Any]:
-        """Analyzes SQL query structure for audit planning"""
+        """STEP 2: Enhanced query analysis for intelligent audit selection"""
         
         analysis = {
             "has_aggregation": bool(re.search(r'\b(SUM|COUNT|AVG|MAX|MIN)\b', sql, re.I)),
             "has_grouping": bool(re.search(r'\bGROUP BY\b', sql, re.I)),
             "has_filtering": bool(re.search(r'\bWHERE\b', sql, re.I)),
             "has_joins": bool(re.search(r'\bJOIN\b', sql, re.I)),
+            "is_distinct_query": bool(re.search(r'\bSELECT DISTINCT\b', sql, re.I)),
+            "is_count_query": bool(re.search(r'\bCOUNT\s*\(', sql, re.I)),
+            "is_simple_select": not any([
+                re.search(r'\b(SUM|AVG|MAX|MIN)\b', sql, re.I),
+                re.search(r'\bGROUP BY\b', sql, re.I),
+                re.search(r'\bJOIN\b', sql, re.I)
+            ]),
             "has_distinct": bool(re.search(r'\bDISTINCT\b', sql, re.I)),
             "has_order_by": bool(re.search(r'\bORDER BY\b', sql, re.I)),
             "has_limit": bool(re.search(r'\bLIMIT\b', sql, re.I)),

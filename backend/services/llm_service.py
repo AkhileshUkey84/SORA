@@ -39,6 +39,12 @@ class LLMService:
         self.last_request_time = 0
         self.min_request_interval = 12  # 12 seconds between requests (5 RPM for free tier)
         self.rate_limit_errors = 0
+        self.demo_mode = os.getenv('DEMO_MODE', 'false').lower() == 'true'
+        
+        # Demo mode uses more aggressive fallbacks to ensure reliability
+        if self.demo_mode:
+            self.min_request_interval = 15  # Even safer for demo
+            self.logger.info("🎪 Demo mode activated - optimized for reliability")
         
         self.logger = logger.bind(service="LLMService")
     
@@ -55,31 +61,90 @@ class LLMService:
         self.last_request_time = time.time()
     
     def generate_sql_fallback(self, schema_info: Dict[str, Any], query: str) -> str:
-        """Generate simple SQL without LLM when rate limited"""
+        """Generate intelligent SQL without LLM when rate limited"""
         table_name = schema_info.get('table_name', 'dataset')
         columns = [col['name'] for col in schema_info.get('columns', [])]
         
-        self.logger.warning(f"FALLBACK SQL GENERATOR TRIGGERED! Using table: {table_name} for query: {query[:100]}")
+        self.logger.warning(f"🚀 INTELLIGENT FALLBACK SQL GENERATOR! Using table: {table_name} for query: {query[:100]}")
         
-        # Simple pattern matching for common queries
+        # Enhanced pattern matching for common business queries
         query_lower = query.lower()
         
-        if any(word in query_lower for word in ['count', 'total', 'number']):
-            return f"SELECT COUNT(*) as count FROM {table_name} LIMIT 100"
-        elif any(word in query_lower for word in ['average', 'avg', 'mean']):
-            numeric_cols = [col for col in columns if any(t in str(col).lower() for t in ['amount', 'value', 'price', 'cost', 'sales'])]
-            if numeric_cols:
-                return f"SELECT AVG({numeric_cols[0]}) as average FROM {table_name} LIMIT 100"
-        elif any(word in query_lower for word in ['group', 'by', 'category']):
-            # Look for categorical columns
-            cat_cols = [col for col in columns if any(t in str(col).lower() for t in ['category', 'type', 'name', 'industry'])]
-            if cat_cols:
-                return f"SELECT {cat_cols[0]}, COUNT(*) as count FROM {table_name} GROUP BY {cat_cols[0]} LIMIT 100"
+        # Day of week analysis (common demo query)
+        if any(word in query_lower for word in ['day', 'week', 'weekday', 'monday', 'tuesday']):
+            date_cols = [col for col in columns if any(t in str(col).lower() for t in ['date', 'time', 'created', 'appointment'])]
+            if date_cols:
+                return f"SELECT DAYNAME({date_cols[0]}) as day_of_week, COUNT(*) as count FROM {table_name} GROUP BY DAYNAME({date_cols[0]}) ORDER BY count DESC LIMIT 10"
         
-        # Default fallback - limit to first few columns and 10 rows for safety
-        if columns and len(columns) > 5:
-            selected_columns = ', '.join(columns[:5])
-            return f"SELECT {selected_columns} FROM {table_name} LIMIT 10"
+        # Top/highest/most queries
+        if any(word in query_lower for word in ['top', 'highest', 'most', 'best', 'maximum']):
+            # Look for quantity or value columns
+            value_cols = [col for col in columns if any(t in str(col).lower() for t in ['amount', 'value', 'price', 'cost', 'sales', 'revenue', 'count'])]
+            cat_cols = [col for col in columns if any(t in str(col).lower() for t in ['category', 'type', 'name', 'product', 'customer'])]
+            if value_cols and cat_cols:
+                return f"SELECT {cat_cols[0]}, SUM({value_cols[0]}) as total FROM {table_name} GROUP BY {cat_cols[0]} ORDER BY total DESC LIMIT 10"
+            elif cat_cols:
+                return f"SELECT {cat_cols[0]}, COUNT(*) as count FROM {table_name} GROUP BY {cat_cols[0]} ORDER BY count DESC LIMIT 10"
+        
+        # Count/total queries
+        if any(word in query_lower for word in ['count', 'total', 'number', 'how many']):
+            if any(word in query_lower for word in ['by', 'per', 'each']):
+                cat_cols = [col for col in columns if any(t in str(col).lower() for t in ['category', 'type', 'status', 'department'])]
+                if cat_cols:
+                    return f"SELECT {cat_cols[0]}, COUNT(*) as count FROM {table_name} GROUP BY {cat_cols[0]} ORDER BY count DESC LIMIT 10"
+            return f"SELECT COUNT(*) as total_count FROM {table_name}"
+        
+        # Average/mean queries
+        elif any(word in query_lower for word in ['average', 'avg', 'mean']):
+            numeric_cols = [col for col in columns if any(t in str(col).lower() for t in ['amount', 'value', 'price', 'cost', 'sales', 'age', 'duration'])]
+            if numeric_cols:
+                if any(word in query_lower for word in ['by', 'per', 'each']):
+                    cat_cols = [col for col in columns if any(t in str(col).lower() for t in ['category', 'type', 'department'])]
+                    if cat_cols:
+                        return f"SELECT {cat_cols[0]}, AVG({numeric_cols[0]}) as average FROM {table_name} GROUP BY {cat_cols[0]} ORDER BY average DESC LIMIT 10"
+                return f"SELECT AVG({numeric_cols[0]}) as average FROM {table_name}"
+        
+        # Time-based queries
+        elif any(word in query_lower for word in ['month', 'year', 'trend', 'over time']):
+            date_cols = [col for col in columns if any(t in str(col).lower() for t in ['date', 'time', 'created'])]
+            if date_cols:
+                return f"SELECT DATE_PART('month', {date_cols[0]}) as month, COUNT(*) as count FROM {table_name} GROUP BY DATE_PART('month', {date_cols[0]}) ORDER BY month LIMIT 12"
+        
+        # Status/category breakdown
+        elif any(word in query_lower for word in ['status', 'breakdown', 'distribution']):
+            status_cols = [col for col in columns if any(t in str(col).lower() for t in ['status', 'state', 'condition', 'type'])]
+            if status_cols:
+                return f"SELECT {status_cols[0]}, COUNT(*) as count FROM {table_name} GROUP BY {status_cols[0]} ORDER BY count DESC LIMIT 10"
+        
+        # Revenue/sales queries
+        elif any(word in query_lower for word in ['revenue', 'sales', 'profit', 'income']):
+            money_cols = [col for col in columns if any(t in str(col).lower() for t in ['amount', 'revenue', 'sales', 'price', 'cost', 'value'])]
+            if money_cols:
+                return f"SELECT SUM({money_cols[0]}) as total_revenue FROM {table_name}"
+        
+        # General grouping queries
+        elif any(word in query_lower for word in ['group', 'by', 'category', 'type']):
+            cat_cols = [col for col in columns if any(t in str(col).lower() for t in ['category', 'type', 'name', 'industry', 'department'])]
+            if cat_cols:
+                return f"SELECT {cat_cols[0]}, COUNT(*) as count FROM {table_name} GROUP BY {cat_cols[0]} ORDER BY count DESC LIMIT 10"
+        
+        # Default fallback with smart column selection
+        if columns:
+            # Prioritize interesting columns for demo
+            priority_cols = []
+            for col in columns[:10]:  # First 10 columns
+                col_lower = col.lower()
+                if any(t in col_lower for t in ['name', 'title', 'id', 'date', 'status', 'type', 'category', 'amount', 'count']):
+                    priority_cols.append(col)
+            
+            if priority_cols:
+                selected_columns = ', '.join(priority_cols[:5])
+                return f"SELECT {selected_columns} FROM {table_name} ORDER BY {priority_cols[0]} LIMIT 10"
+            elif len(columns) > 5:
+                selected_columns = ', '.join(columns[:5])
+                return f"SELECT {selected_columns} FROM {table_name} LIMIT 10"
+            else:
+                return f"SELECT * FROM {table_name} LIMIT 10"
         else:
             return f"SELECT * FROM {table_name} LIMIT 10"
     

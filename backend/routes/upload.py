@@ -138,6 +138,107 @@ async def get_dataset_info(
     }
 
 
+@router.get("/datasets")
+async def list_datasets(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """List all datasets for current user"""
+    
+    try:
+        storage_service = StorageService()
+        db_service = request.app.state.db_service
+        
+        # Get all datasets for user (simplified for demo)
+        datasets = await storage_service.list_user_datasets(current_user["id"])
+        
+        # Enrich with schema info from database
+        enriched_datasets = []
+        for dataset in datasets:
+            dataset_info = dataset.copy()
+            
+            # Try to get schema info
+            schema = await db_service.get_table_schema(dataset["dataset_id"], suppress_warnings=True)
+            if schema:
+                dataset_info["schema_available"] = True
+                dataset_info["column_count"] = len(schema["columns"])
+                dataset_info["row_count"] = schema.get("row_count", 0)
+            else:
+                dataset_info["schema_available"] = False
+                
+            enriched_datasets.append(dataset_info)
+        
+        return {
+            "success": True,
+            "datasets": enriched_datasets,
+            "total_count": len(enriched_datasets)
+        }
+        
+    except Exception as e:
+        logger.error("Failed to list datasets",
+                    user_id=current_user["id"],
+                    error=str(e))
+        raise HTTPException(500, "Failed to retrieve datasets")
+
+
+@router.get("/datasets/{dataset_id}/preview")
+async def preview_dataset(
+    request: Request,
+    dataset_id: str,
+    current_user: dict = Depends(get_current_user),
+    limit: int = 10
+):
+    """Returns first N rows and column list for preview"""
+    
+    try:
+        # Check access
+        auth_service = request.app.state.auth_service
+        has_access = await auth_service.validate_dataset_access(
+            current_user["id"],
+            dataset_id
+        )
+        
+        if not has_access:
+            raise HTTPException(403, "Access denied to dataset")
+        
+        # Get database service
+        db_service = request.app.state.db_service
+        
+        # Get schema first
+        schema = await db_service.get_table_schema(dataset_id)
+        if not schema:
+            raise HTTPException(404, "Dataset not found")
+        
+        # Get preview data
+        table_name = schema["table_name"]
+        preview_sql = f"SELECT * FROM {table_name} LIMIT ?"
+        
+        preview_data = await db_service.execute_query(
+            preview_sql,
+            params=[limit],
+            dataset_id=dataset_id
+        )
+        
+        return {
+            "success": True,
+            "dataset_id": dataset_id,
+            "columns": [col["name"] for col in schema["columns"]],
+            "column_info": schema["columns"],
+            "preview_data": preview_data,
+            "preview_row_count": len(preview_data),
+            "total_rows": schema.get("row_count", 0),
+            "limit": limit
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to preview dataset",
+                    dataset_id=dataset_id,
+                    error=str(e))
+        raise HTTPException(500, "Failed to preview dataset")
+
+
 @router.delete("/datasets/{dataset_id}")
 async def delete_dataset(
     dataset_id: str,

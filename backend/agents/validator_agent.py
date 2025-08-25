@@ -118,72 +118,118 @@ class ValidatorAgent(BaseAgent):
         )
     
     def _initialize_rules(self) -> List[ValidationRule]:
-        """Initialize all validation rules"""
+        """STEP 3: Initialize validation rules with user-friendly messaging"""
         
         class SelectOnlyRule(ValidationRule):
             severity = "high"
-            suggestion = "Only SELECT queries are allowed"
+            suggestion = "I can only help with data analysis queries (SELECT statements)"
             
             def validate(self, sql: str, context: AgentContext) -> tuple[bool, Optional[str]]:
                 parsed = sqlparse.parse(sql)
                 if not parsed:
-                    return False, "Invalid SQL syntax"
+                    return False, "I couldn't understand this query. Please check the syntax and try again."
                 
                 first_token = parsed[0].token_first(skip_ws=True, skip_cm=True)
                 if not first_token or first_token.ttype != sqlparse.tokens.DML or \
                    first_token.value.upper() != 'SELECT':
-                    return False, "Query must be a SELECT statement"
+                    return False, "I can only run SELECT queries to analyze your data. I can't modify, delete, or create data for security reasons."
                 
                 return True, None
         
-        class NoSubqueryRule(ValidationRule):
+        class ComplexQueryRule(ValidationRule):
+            """STEP 3: Improved detection for overly complex queries"""
             severity = "medium"
-            suggestion = "Subqueries can impact performance"
-            fix_description = "Simplified to single query"
+            suggestion = "Let's break this down into simpler questions"
             
             def validate(self, sql: str, context: AgentContext) -> tuple[bool, Optional[str]]:
-                # Check for common subquery patterns
-                if '(SELECT' in sql.upper():
-                    return False, "Subqueries are not allowed for performance reasons"
+                # Count complexity indicators
+                complexity_score = 0
+                complexity_score += sql.upper().count('(SELECT')  # Subqueries
+                complexity_score += sql.upper().count('JOIN')     # Joins
+                complexity_score += sql.upper().count('UNION')    # Unions
+                complexity_score += len(sql.split()) // 20       # Length factor
+                
+                # More lenient threshold - allow moderately complex queries
+                if complexity_score > 6:  # Raised from 3
+                    return False, "This query is quite complex. Could you break it down into smaller questions? I work better with focused queries."
+                elif complexity_score > 3:
+                    # Just a warning for moderate complexity
+                    return True, "This is a complex query - I'll do my best, but simpler questions often give clearer results."
+                
                 return True, None
         
         class ColumnWhitelistRule(ValidationRule):
             severity = "medium"
-            suggestion = "Use only existing columns"
+            suggestion = "Check your column names match the dataset"
             
             def validate(self, sql: str, context: AgentContext) -> tuple[bool, Optional[str]]:
-                # This would check against actual schema
-                # For now, just check for obvious issues
-                if re.search(r'\b(password|ssn|credit_card)\b', sql, re.I):
-                    return False, "Query attempts to access sensitive columns"
+                # Check for obvious sensitive columns
+                sensitive_patterns = [
+                    r'\bpassword\b', r'\bssn\b', r'\bcredit_card\b', 
+                    r'\bsocial_security\b', r'\bcc_number\b'
+                ]
+                
+                for pattern in sensitive_patterns:
+                    if re.search(pattern, sql, re.I):
+                        return False, "This query tries to access sensitive information that I can't show for privacy reasons. Let's focus on business metrics instead."
+                
+                return True, None
+        
+        class NaturalLanguageRule(ValidationRule):
+            """STEP 3: Better handling of natural language mixed in queries"""
+            severity = "low"
+            suggestion = "Let me convert your question to proper SQL"
+            
+            def validate(self, sql: str, context: AgentContext) -> tuple[bool, Optional[str]]:
+                # Check if this looks more like natural language than SQL
+                natural_indicators = [
+                    r'\bhow many\b', r'\bwhat is\b', r'\bshow me\b', 
+                    r'\bcan you\b', r'\bi want\b', r'\bplease\b'
+                ]
+                
+                # If it has natural language indicators AND doesn't look like SQL
+                has_natural = any(re.search(pattern, sql, re.I) for pattern in natural_indicators)
+                has_sql = any(keyword in sql.upper() for keyword in ['SELECT', 'FROM', 'WHERE'])
+                
+                if has_natural and not has_sql:
+                    return False, "I see you've asked a natural language question! Let me convert that to a data query for you."
+                
                 return True, None
         
         class InjectionPreventionRule(ValidationRule):
+            """STEP 3: More sophisticated injection detection with better messaging"""
             severity = "high"
-            suggestion = "Remove special characters"
+            suggestion = "Let's keep queries safe and focused on data analysis"
             
             def validate(self, sql: str, context: AgentContext) -> tuple[bool, Optional[str]]:
-                # Check for SQL injection patterns
+                # Sophisticated SQL injection patterns
                 injection_patterns = [
-                    r';\s*DROP',
-                    r';\s*DELETE',
-                    r'--\s*$',
-                    r'\/\*.*\*\/',
-                    r'UNION\s+SELECT',
-                    r'OR\s+1\s*=\s*1',
-                    r'AND\s+1\s*=\s*0'
+                    (r';\s*DROP\b', "I can't run queries that delete or modify the database structure."),
+                    (r';\s*DELETE\b', "I can't run queries that delete data - I'm here for analysis only."),
+                    (r';\s*INSERT\b', "I can't add new data - let's focus on analyzing what's already there."),
+                    (r';\s*UPDATE\b', "I can't modify existing data - I'm designed for analysis only."),
+                    (r'--\s*$', "I noticed some comment syntax that might interfere with the query."),
+                    (r'\/\*.*\*\/', "I found comment blocks that might cause issues."),
+                    (r'\bUNION\s+SELECT\b.*\bOR\s+1\s*=\s*1', "This looks like a security test - let's stick to legitimate data queries."),
+                    (r'\bOR\s+1\s*=\s*1', "This pattern could bypass security - let's write a proper data query instead."),
+                    (r'\bAND\s+1\s*=\s*0', "This pattern looks suspicious - let's focus on analyzing your actual data.")
                 ]
                 
-                for pattern in injection_patterns:
+                for pattern, message in injection_patterns:
                     if re.search(pattern, sql, re.I):
-                        return False, "Query contains potential SQL injection"
+                        return False, message
+                
+                # Check for excessive semicolons (chaining attempts)
+                if sql.count(';') > 1:
+                    return False, "I can only run one query at a time. Could you ask about one thing at a time?"
                 
                 return True, None
         
         return [
             SelectOnlyRule(),
-            NoSubqueryRule(),
+            ComplexQueryRule(),
             ColumnWhitelistRule(),
+            NaturalLanguageRule(),
             InjectionPreventionRule()
         ]
     

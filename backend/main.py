@@ -23,7 +23,7 @@ from middleware.auth import AuthMiddleware
 from middleware.rate_limit import RateLimitMiddleware
 
 # Import routes
-from routes import query_router, upload_router, health_router, session_router
+from routes import query_router, upload_router, health_router, session_router, intelligence_router
 
 # Import services
 from services.database_service import DatabaseService
@@ -193,6 +193,7 @@ app.include_router(query_router)
 app.include_router(upload_router)
 app.include_router(health_router)
 app.include_router(session_router)
+app.include_router(intelligence_router)
 
 # Root endpoint
 @app.get("/", tags=["root"])
@@ -208,6 +209,7 @@ async def root():
             "upload": "/api/v1/upload",
             "datasets": "/api/v1/datasets",
             "sessions": "/api/v1/sessions",
+            "intelligence": "/api/v1/intelligence",
             "health": "/healthz",
             "metrics": "/metrics",
             "docs": "/docs" if settings.debug else None

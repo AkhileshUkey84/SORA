@@ -8,6 +8,8 @@ Ensures queries are well-formed before SQL generation.
 from typing import Dict, Any, List, Optional, Tuple
 from agents.base import BaseAgent, AgentContext, AgentResult
 from enum import Enum
+from pydantic import BaseModel, Field
+from datetime import datetime
 import re
 
 
@@ -18,6 +20,33 @@ class QueryIntent(str, Enum):
     TREND = "trend"
     DETAIL = "detail"
     EXPLORATION = "exploration"
+
+
+class BusinessContext(BaseModel):
+    """Business context for domain-aware query planning"""
+    domain: Optional[str] = None  # e.g., "sales", "finance", "marketing"
+    key_metrics: List[str] = []  # Primary metrics for this domain
+    common_dimensions: List[str] = []  # Typical grouping columns
+    time_periods: List[str] = []  # Common time ranges
+    business_rules: Dict[str, Any] = {}  # Domain-specific rules
+
+
+class AmbiguityResolution(BaseModel):
+    """Represents a resolved ambiguity with confidence scoring"""
+    ambiguity_type: str
+    original_term: str
+    resolved_term: str
+    confidence: float
+    reasoning: str
+    business_context: Optional[Dict[str, Any]] = None
+
+
+class IntentConfidence(BaseModel):
+    """Confidence scoring for detected intent"""
+    intent: QueryIntent
+    confidence: float
+    evidence: List[str] = []  # What led to this intent classification
+    alternative_intents: List[Tuple[QueryIntent, float]] = []  # Other possible intents
 
 
 class PlannerAgent(BaseAgent):
@@ -33,6 +62,11 @@ class PlannerAgent(BaseAgent):
         # Add semantic layer support
         from services.semantic_layer_service import SemanticLayerService
         self.semantic_layer = SemanticLayerService()
+        
+        # Enhanced intelligence features
+        self.business_contexts = self._initialize_business_contexts()
+        self.confidence_threshold = 0.7  # Minimum confidence for automatic resolution
+        self.context_weight = 0.3  # How much conversation context influences decisions
     
     async def process(self, context: AgentContext, **kwargs) -> AgentResult:
         """
@@ -395,3 +429,276 @@ class PlannerAgent(BaseAgent):
         
         # Cap at 1.0
         return min(complexity, 1.0)
+    
+    def _initialize_business_contexts(self) -> Dict[str, BusinessContext]:
+        """Initialize domain-specific business contexts for better clarifications"""
+        return {
+            "sales": BusinessContext(
+                domain="sales",
+                key_metrics=["revenue", "units_sold", "conversion_rate", "average_order_value"],
+                common_dimensions=["region", "product_category", "sales_rep", "channel"],
+                time_periods=["monthly", "quarterly", "year_over_year", "season"],
+                business_rules={
+                    "recent": "last_30_days",
+                    "performance": "revenue_growth_rate",
+                    "top": "by_revenue_desc"
+                }
+            ),
+            "finance": BusinessContext(
+                domain="finance",
+                key_metrics=["profit", "margin", "cost", "roi", "burn_rate"],
+                common_dimensions=["department", "cost_center", "category", "account"],
+                time_periods=["monthly", "quarterly", "fiscal_year"],
+                business_rules={
+                    "recent": "current_quarter",
+                    "performance": "profit_margin",
+                    "efficiency": "cost_per_unit"
+                }
+            ),
+            "marketing": BusinessContext(
+                domain="marketing",
+                key_metrics=["impressions", "clicks", "ctr", "cac", "ltv"],
+                common_dimensions=["campaign", "channel", "audience", "geo"],
+                time_periods=["daily", "weekly", "campaign_period"],
+                business_rules={
+                    "recent": "last_7_days",
+                    "performance": "conversion_rate",
+                    "success": "roi_positive"
+                }
+            )
+        }
+    
+    def _detect_intent_with_confidence(self, query: str, metadata: Dict[str, Any]) -> IntentConfidence:
+        """
+        Enhanced intent detection with confidence scoring and evidence tracking.
+        """
+        intent_scores = {}
+        evidence = []
+        
+        for intent, patterns in self.intent_patterns.items():
+            matches = []
+            for pattern in patterns:
+                match = pattern.search(query)
+                if match:
+                    matches.append(match.group())
+            
+            if matches:
+                intent_scores[intent] = len(matches)
+                evidence.extend([f"Found '{match}' indicating {intent.value}" for match in matches])
+        
+        # Factor in business context
+        domain = self._detect_business_domain(query, metadata)
+        if domain and domain in self.business_contexts:
+            business_context = self.business_contexts[domain]
+            
+            # Boost confidence for domain-appropriate intents
+            if QueryIntent.AGGREGATION in intent_scores and any(
+                metric in query.lower() for metric in business_context.key_metrics
+            ):
+                intent_scores[QueryIntent.AGGREGATION] *= 1.2
+                evidence.append(f"Domain '{domain}' context supports aggregation intent")
+        
+        if not intent_scores:
+            return IntentConfidence(
+                intent=QueryIntent.EXPLORATION,
+                confidence=0.5,
+                evidence=["No clear intent patterns found - defaulting to exploration"]
+            )
+        
+        # Determine primary intent and confidence
+        primary_intent = max(intent_scores, key=intent_scores.get)
+        max_score = intent_scores[primary_intent]
+        total_score = sum(intent_scores.values())
+        
+        confidence = max_score / max(total_score, 1)
+        
+        # Build alternative intents
+        alternatives = [
+            (intent, score / max(total_score, 1)) 
+            for intent, score in intent_scores.items() 
+            if intent != primary_intent and score > 0
+        ]
+        alternatives.sort(key=lambda x: x[1], reverse=True)
+        
+        return IntentConfidence(
+            intent=primary_intent,
+            confidence=min(confidence, 1.0),
+            evidence=evidence,
+            alternative_intents=alternatives[:2]  # Top 2 alternatives
+        )
+    
+    def _detect_business_domain(self, query: str, metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Detect business domain from query content and metadata.
+        """
+        query_lower = query.lower()
+        
+        # Check for explicit domain indicators
+        domain_keywords = {
+            "sales": ["revenue", "sales", "orders", "customers", "conversion"],
+            "finance": ["profit", "cost", "budget", "margin", "expense", "roi"],
+            "marketing": ["campaign", "clicks", "impressions", "ctr", "ads", "leads"]
+        }
+        
+        domain_scores = {}
+        for domain, keywords in domain_keywords.items():
+            score = sum(1 for keyword in keywords if keyword in query_lower)
+            if score > 0:
+                domain_scores[domain] = score
+        
+        # Check metadata for domain hints
+        if "domain" in metadata:
+            explicit_domain = metadata["domain"]
+            if explicit_domain in domain_scores:
+                domain_scores[explicit_domain] += 2  # Boost explicit domain
+            else:
+                domain_scores[explicit_domain] = 2
+        
+        # Check conversation context
+        conversation_context = metadata.get("conversation_context", {})
+        if "domain" in conversation_context:
+            context_domain = conversation_context["domain"]
+            domain_scores[context_domain] = domain_scores.get(context_domain, 0) + 1
+        
+        if domain_scores:
+            return max(domain_scores, key=domain_scores.get)
+        
+        return None
+    
+    def _enhanced_generate_clarifications(
+        self, 
+        ambiguities: List[Dict[str, Any]], 
+        context: AgentContext
+    ) -> List[str]:
+        """
+        Enhanced clarification generation with business-aware suggestions.
+        """
+        questions = []
+        detected_domain = self._detect_business_domain(context.query, context.metadata)
+        business_context = self.business_contexts.get(detected_domain) if detected_domain else None
+        
+        # Sort ambiguities by confidence (highest first)
+        ambiguities.sort(key=lambda x: x.get("confidence", 0.5), reverse=True)
+        
+        for ambiguity in ambiguities[:3]:  # Limit to top 3 ambiguities
+            amb_type = ambiguity["type"]
+            
+            if amb_type == "temporal" and business_context:
+                # Use business-specific time periods
+                suggestions = business_context.time_periods
+                questions.append(
+                    f"📅 What time period should I analyze? "
+                    f"For {detected_domain} data, common options are: {', '.join(suggestions[:3])}"
+                )
+                
+            elif amb_type == "metric" and business_context:
+                # Suggest domain-specific metrics
+                suggestions = business_context.key_metrics
+                questions.append(
+                    f"📈 Which {detected_domain} metric would you like to focus on? "
+                    f"Options: {', '.join(suggestions[:4])}"
+                )
+                
+            elif amb_type == "aggregation" and business_context:
+                # Suggest domain-specific dimensions
+                suggestions = business_context.common_dimensions
+                questions.append(
+                    f"📊 How should I break down the {detected_domain} data? "
+                    f"Common groupings: {', '.join(suggestions[:3])}"
+                )
+                
+            else:
+                # Fallback to generic clarification
+                questions.append(ambiguity.get("clarification", "Could you clarify this part of your query?"))
+        
+        # Add proactive business insights
+        if business_context and not questions:
+            questions.append(
+                f"💡 I detected you're asking about {detected_domain} data. "
+                f"You might want to explore: {', '.join(business_context.key_metrics[:3])}"
+            )
+        
+        return questions
+    
+    def _resolve_ambiguity_with_context(
+        self, 
+        ambiguity: Dict[str, Any], 
+        context: AgentContext
+    ) -> Optional[AmbiguityResolution]:
+        """
+        Attempt to resolve ambiguity using business context and conversation history.
+        """
+        amb_type = ambiguity["type"]
+        original_term = ambiguity["match"]
+        
+        detected_domain = self._detect_business_domain(context.query, context.metadata)
+        business_context = self.business_contexts.get(detected_domain) if detected_domain else None
+        
+        if not business_context:
+            return None
+        
+        # Try to resolve using business rules
+        business_rules = business_context.business_rules
+        
+        if amb_type == "temporal" and "recent" in original_term.lower():
+            resolved_term = business_rules.get("recent")
+            if resolved_term:
+                return AmbiguityResolution(
+                    ambiguity_type=amb_type,
+                    original_term=original_term,
+                    resolved_term=resolved_term,
+                    confidence=0.8,
+                    reasoning=f"Using {detected_domain} domain default for 'recent'",
+                    business_context={"domain": detected_domain}
+                )
+        
+        elif amb_type == "metric" and any(word in original_term.lower() for word in ["performance", "efficiency"]):
+            resolved_term = business_rules.get(original_term.lower())
+            if resolved_term:
+                return AmbiguityResolution(
+                    ambiguity_type=amb_type,
+                    original_term=original_term,
+                    resolved_term=resolved_term,
+                    confidence=0.75,
+                    reasoning=f"Using {detected_domain} domain interpretation for '{original_term}'",
+                    business_context={"domain": detected_domain}
+                )
+        
+        elif amb_type == "ranking" and "top" in original_term.lower():
+            # Use business context to suggest appropriate limit
+            if detected_domain == "sales":
+                resolved_term = "top_10_by_revenue"
+                confidence = 0.7
+            elif detected_domain == "marketing":
+                resolved_term = "top_5_by_performance"
+                confidence = 0.7
+            else:
+                resolved_term = "top_10"
+                confidence = 0.6
+            
+            return AmbiguityResolution(
+                ambiguity_type=amb_type,
+                original_term=original_term,
+                resolved_term=resolved_term,
+                confidence=confidence,
+                reasoning=f"Using {detected_domain or 'general'} domain default for ranking",
+                business_context={"domain": detected_domain}
+            )
+        
+        return None
+    
+    def _calculate_clarification_confidence(self, ambiguities: List[Dict[str, Any]]) -> float:
+        """
+        Calculate overall confidence in the need for clarification.
+        """
+        if not ambiguities:
+            return 1.0  # No ambiguities = high confidence
+        
+        # Weight ambiguities by their confidence scores
+        total_confidence = sum(amb.get("confidence", 0.5) for amb in ambiguities)
+        avg_confidence = total_confidence / len(ambiguities)
+        
+        # Lower confidence means more clarification needed
+        clarification_confidence = 1.0 - avg_confidence
+        
+        return max(0.1, min(clarification_confidence, 0.9))
