@@ -14,13 +14,13 @@ We are **Team SORA**, participating in **Kurukshetra 2025**, under the **AI and 
 ---
 
 ## 💡 Project Overview  
-**SORA** is an end-to-end, AI-powered data analytics assistant that lets any user ask questions in plain English and instantly get accurate, trustworthy insights from their datasets. It combines multi-agent orchestration, schema-aware NL→SQL translation, iterative self-correction, proactive insight generation, and transparent security/lineage to deliver reliable, explainable results.  
+**Team SORA** has created an end-to-end, AI-powered data analytics assistant that lets any user ask questions in plain English and instantly get accurate, trustworthy insights from their datasets. It combines multi-agent orchestration, schema-aware NL→SQL translation, iterative self-correction, proactive insight generation, and transparent security/lineage to deliver reliable, explainable results.  
 
 ---
 
 ## 🔎 How It Works  
 1. **Dataset Ingestion**  
-   - Users upload CSV, Excel, or JSON files via a React web interface. Each upload is saved, its schema auto-detected, and a DuckDB view created for fast in-memory querying.  
+   - Users upload CSV files via a React web interface. Each upload is saved, its schema auto-detected, and a DuckDB view created for fast in-memory querying.  
    - Metadata—including column names, types, sample values, and PII flags—is stored for downstream use.  
 
 2. **Conversational Context & Ambiguity Handling**  
@@ -83,7 +83,7 @@ We are **Team SORA**, participating in **Kurukshetra 2025**, under the **AI and 
 ## ⚙️ Setup  
 1. Clone the repository  
    ```bash
-   git clone https://github.com/<your-repo>.git
+   git clone https://github.com/AkhileshUkey84/SORA.git
    cd SORA
    ```  
 2. Backend (Python)  
@@ -134,9 +134,5 @@ We are **Team SORA**, participating in **Kurukshetra 2025**, under the **AI and 
 - PII masking for sensitive columns where applicable.  
 - Human-readable explanations for any guardrail-induced changes.  
 
----
-
-## 📜 License  
-MIT (or as applicable).  
 
 
