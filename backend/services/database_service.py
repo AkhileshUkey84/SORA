@@ -69,9 +69,12 @@ class DatabaseService:
             # Get or create connection for dataset
             conn = self._get_connection(dataset_id)
             
+            # Clean and prepare the DataFrame for DuckDB
+            df_clean = self._prepare_dataframe_for_duckdb(df.copy())
+            
             # Register DataFrame as table in both connections
-            conn.register(table_name, df)
-            self.main_conn.register(table_name, df)
+            conn.register(table_name, df_clean)
+            self.main_conn.register(table_name, df_clean)
             
             # Verify table creation
             after_tables = await self.list_all_tables()
@@ -263,6 +266,118 @@ class DatabaseService:
                 "error": str(e)
             }
     
+    def _prepare_dataframe_for_duckdb(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Prepares DataFrame for DuckDB by handling mixed data types and problematic values.
+        This fixes the 'C' to DECIMAL conversion error.
+        """
+        
+        df_clean = df.copy()
+        
+        for col_name in df_clean.columns:
+            col = df_clean[col_name]
+            
+            # Handle object columns that might contain mixed numeric/text data
+            if col.dtype == 'object':
+                # Check if column contains mostly numeric data
+                if self._is_numeric_with_exceptions(col):
+                    self.logger.info(f"Converting mixed numeric/text column '{col_name}' for DuckDB compatibility")
+                    
+                    # Clean the column for numeric conversion
+                    df_clean[col_name] = self._clean_numeric_column(col)
+                    
+                    # Add a companion column to preserve original non-numeric values
+                    non_numeric_col = f"{col_name}_notes"
+                    df_clean[non_numeric_col] = col.where(~self._can_convert_to_numeric(col), None)
+                    
+                    self.logger.info(f"Created companion column '{non_numeric_col}' to preserve non-numeric values")
+        
+        return df_clean
+    
+    def _is_numeric_with_exceptions(self, series: pd.Series) -> bool:
+        """
+        Checks if a series contains mostly numeric data but has some non-numeric exceptions.
+        Returns True if > 50% of values can be converted to numeric.
+        """
+        if series.empty:
+            return False
+        
+        # Sample up to 1000 values for performance
+        sample = series.dropna().head(1000)
+        if len(sample) == 0:
+            return False
+        
+        # Count how many can be converted to numeric
+        numeric_count = 0
+        for val in sample:
+            if self._can_convert_to_numeric_value(val):
+                numeric_count += 1
+        
+        return numeric_count / len(sample) > 0.5
+    
+    def _can_convert_to_numeric(self, series: pd.Series) -> pd.Series:
+        """
+        Returns a boolean series indicating which values can be converted to numeric.
+        """
+        return series.apply(self._can_convert_to_numeric_value)
+    
+    def _can_convert_to_numeric_value(self, value) -> bool:
+        """
+        Checks if a single value can be converted to numeric.
+        """
+        if pd.isna(value):
+            return True  # NaN is numeric
+        
+        try:
+            # Handle string values
+            if isinstance(value, str):
+                # Remove common thousand separators
+                clean_val = value.replace(',', '').replace(' ', '').strip()
+                
+                # Skip obviously non-numeric values
+                if clean_val.upper() in ['C', 'CONFIDENTIAL', 'SUPPRESSED', 'N/A', 'NULL', '']:
+                    return False
+                
+                # Try to convert
+                float(clean_val)
+                return True
+            
+            # Try direct conversion for non-string types
+            float(value)
+            return True
+            
+        except (ValueError, TypeError):
+            return False
+    
+    def _clean_numeric_column(self, series: pd.Series) -> pd.Series:
+        """
+        Cleans a column with mixed numeric/text data for DuckDB.
+        Converts numeric values and replaces non-numeric with NULL.
+        """
+        
+        def convert_value(val):
+            if pd.isna(val):
+                return None
+            
+            try:
+                if isinstance(val, str):
+                    # Remove thousand separators
+                    clean_val = val.replace(',', '').replace(' ', '').strip()
+                    
+                    # Handle special cases
+                    if clean_val.upper() in ['C', 'CONFIDENTIAL', 'SUPPRESSED', 'N/A', 'NULL', '']:
+                        return None
+                    
+                    # Try conversion
+                    return float(clean_val)
+                
+                return float(val)
+                
+            except (ValueError, TypeError):
+                return None
+        
+        return series.apply(convert_value)
+    
     def _get_connection(self, dataset_id: str) -> duckdb.DuckDBPyConnection:
         """Gets or creates connection for dataset"""
         
@@ -283,7 +398,7 @@ class DatabaseService:
         table_name: str,
         df: pd.DataFrame
     ) -> Dict[str, Any]:
-        """Extracts comprehensive schema information"""
+        """Extracts comprehensive schema information with intelligent data type detection"""
         
         schema = {
             "table_name": table_name,
@@ -298,21 +413,144 @@ class DatabaseService:
                 "nullable": df[col_name].isnull().any()
             }
             
-            # Add sample values for categorical columns
-            if df[col_name].dtype == 'object':
-                unique_values = df[col_name].dropna().unique()
-                if len(unique_values) <= 20:
-                    col_info["unique_values"] = unique_values.tolist()
-                else:
-                    col_info["sample_values"] = unique_values[:5].tolist()
-                    col_info["unique_count"] = len(unique_values)
+            # Intelligent data type classification for query planning
+            semantic_type, aggregable, suggested_ops = self._classify_column_semantics(df[col_name])
+            col_info["semantic_type"] = semantic_type  # 'numeric', 'categorical', 'text', 'date', 'boolean'
+            col_info["aggregable"] = aggregable  # Can use SUM, AVG, etc.
+            col_info["suggested_operations"] = suggested_ops  # Valid operations for this column
             
-            # Add statistics for numeric columns
-            elif pd.api.types.is_numeric_dtype(df[col_name]):
-                col_info["min"] = float(df[col_name].min())
-                col_info["max"] = float(df[col_name].max())
-                col_info["mean"] = float(df[col_name].mean())
+            # Add detailed analysis based on semantic type
+            self._add_column_details(col_info, df[col_name], semantic_type)
             
             schema["columns"].append(col_info)
         
         return schema
+    
+    def _classify_column_semantics(self, series: pd.Series) -> tuple[str, bool, List[str]]:
+        """Intelligently classify column semantics for query planning"""
+        
+        # Check for numeric types first
+        if pd.api.types.is_numeric_dtype(series):
+            # Check if it's actually a categorical ID (high cardinality integers)
+            if pd.api.types.is_integer_dtype(series):
+                unique_ratio = series.nunique() / len(series)
+                if unique_ratio > 0.9:  # Likely an ID or code
+                    return 'categorical', False, ['COUNT', 'DISTINCT', 'FILTER', 'GROUP BY']
+            
+            # True numeric - can aggregate
+            return 'numeric', True, ['SUM', 'AVG', 'MIN', 'MAX', 'COUNT', 'GROUP BY', 'ORDER BY', 'FILTER']
+        
+        # Check for boolean
+        elif pd.api.types.is_bool_dtype(series):
+            return 'boolean', False, ['COUNT', 'GROUP BY', 'FILTER']
+        
+        # Check for datetime
+        elif pd.api.types.is_datetime64_any_dtype(series):
+            return 'date', False, ['MIN', 'MAX', 'COUNT', 'GROUP BY', 'ORDER BY', 'FILTER', 'DATE_FUNCTIONS']
+        
+        # String/object types - need deeper analysis
+        elif series.dtype == 'object':
+            unique_count = series.nunique()
+            total_count = len(series)
+            unique_ratio = unique_count / total_count if total_count > 0 else 0
+            
+            # Check if it looks like a date string
+            if self._is_date_column(series):
+                return 'date', False, ['MIN', 'MAX', 'COUNT', 'GROUP BY', 'ORDER BY', 'FILTER']
+            
+            # Low cardinality = categorical (good for grouping)
+            elif unique_ratio < 0.1 or unique_count < 50:
+                return 'categorical', False, ['COUNT', 'DISTINCT', 'GROUP BY', 'FILTER']
+            
+            # High cardinality = likely text/names/descriptions
+            else:
+                return 'text', False, ['COUNT', 'DISTINCT', 'FILTER', 'SEARCH']
+        
+        # Fallback
+        else:
+            return 'unknown', False, ['COUNT', 'FILTER']
+    
+    def _is_date_column(self, series: pd.Series) -> bool:
+        """Check if a string column contains dates"""
+        if series.dtype != 'object':
+            return False
+        
+        # Sample a few non-null values
+        sample = series.dropna().head(10)
+        if len(sample) == 0:
+            return False
+        
+        # Common date patterns
+        date_patterns = [
+            r'\d{4}-\d{1,2}-\d{1,2}',  # YYYY-MM-DD
+            r'\d{1,2}/\d{1,2}/\d{2,4}',  # MM/DD/YY or MM/DD/YYYY
+            r'\d{1,2}-\d{1,2}-\d{2,4}',  # MM-DD-YY or MM-DD-YYYY
+            r'\d{4}\d{2}\d{2}',  # YYYYMMDD
+            r'\w{3}\s+\d{1,2},?\s+\d{4}',  # Jan 1, 2024
+        ]
+        
+        matches = 0
+        for value in sample:
+            if pd.isna(value):
+                continue
+            value_str = str(value).strip()
+            for pattern in date_patterns:
+                if re.match(pattern, value_str):
+                    matches += 1
+                    break
+        
+        # If more than 70% match date patterns, likely a date column
+        return matches / len(sample) > 0.7
+    
+    def _add_column_details(self, col_info: Dict[str, Any], series: pd.Series, semantic_type: str):
+        """Add detailed analysis based on semantic type"""
+        
+        # Add sample values for categorical/text columns
+        if semantic_type in ['categorical', 'text']:
+            unique_values = series.dropna().unique()
+            if len(unique_values) <= 20:
+                col_info["unique_values"] = [str(v) for v in unique_values.tolist()]
+                col_info["cardinality"] = "low"  # Categorical
+            else:
+                col_info["sample_values"] = [str(v) for v in unique_values[:5].tolist()]
+                col_info["unique_count"] = len(unique_values)
+                col_info["cardinality"] = "high" if len(unique_values) > len(series) * 0.8 else "medium"
+        
+        # Add statistics for numeric columns
+        elif semantic_type == 'numeric':
+            try:
+                col_info["min"] = float(series.min())
+                col_info["max"] = float(series.max())
+                col_info["mean"] = float(series.mean())
+                col_info["std"] = float(series.std())
+                
+                # Detect if it's likely an ID or code (high cardinality integers)
+                if pd.api.types.is_integer_dtype(series):
+                    unique_ratio = series.nunique() / len(series)
+                    if unique_ratio > 0.9:  # Likely an ID
+                        col_info["likely_identifier"] = True
+                        col_info["suggested_operations"] = ["COUNT", "DISTINCT", "FILTER"]
+            except (ValueError, TypeError):
+                # Handle edge cases with non-numeric values in numeric columns
+                pass
+        
+        # Add date range for date columns
+        elif semantic_type == 'date':
+            try:
+                col_info["date_range"] = {
+                    "min": str(series.min()),
+                    "max": str(series.max())
+                }
+            except (ValueError, TypeError):
+                # Handle edge cases with date parsing
+                pass
+        
+        # Add basic stats for boolean columns
+        elif semantic_type == 'boolean':
+            try:
+                value_counts = series.value_counts()
+                col_info["value_distribution"] = {
+                    str(k): int(v) for k, v in value_counts.items()
+                }
+            except (ValueError, TypeError):
+                pass

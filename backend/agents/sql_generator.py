@@ -151,15 +151,36 @@ SQL:"""
         
         for col in schema['columns']:
             nullable = "NULL" if col.get('nullable', True) else "NOT NULL"
-            lines.append(f"  - {col['name']} ({col['type']}) {nullable}")
+            col_line = f"  - {col['name']} ({col['type']}) {nullable}"
+            
+            # Add semantic type info if available
+            if col.get('semantic_type'):
+                semantic_type = col['semantic_type']
+                if semantic_type == 'numeric' and col.get('aggregable'):
+                    col_line += f" [NUMERIC - can use SUM, AVG, etc.]"
+                elif semantic_type == 'categorical':
+                    col_line += f" [CATEGORICAL - good for GROUP BY]"
+                elif col['name'].endswith('_notes'):
+                    col_line += f" [NOTES - contains non-numeric values like 'C' for confidential data]"
+            
+            lines.append(col_line)
             
             # Add sample values if available
             if col.get('sample_values'):
                 samples = ', '.join(str(v) for v in col['sample_values'][:3])
                 lines.append(f"    Sample values: {samples}")
+            elif col.get('unique_values') and len(col['unique_values']) <= 5:
+                values = ', '.join(str(v) for v in col['unique_values'][:5])
+                lines.append(f"    Possible values: {values}")
         
         if schema.get('row_count'):
             lines.append(f"\nTotal rows: {schema['row_count']:,}")
+        
+        # Add note about data cleaning
+        notes_cols = [col['name'] for col in schema['columns'] if col['name'].endswith('_notes')]
+        if notes_cols:
+            lines.append(f"\nNOTE: Columns ending with '_notes' contain original non-numeric values that were cleaned for analysis.")
+            lines.append(f"Use the corresponding main column for numeric operations.")
         
         return '\n'.join(lines)
     

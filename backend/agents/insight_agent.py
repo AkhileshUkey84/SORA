@@ -314,49 +314,129 @@ class InsightDiscoveryAgent(BaseAgent):
     
     async def _find_segmentation_insights(self, df: pd.DataFrame, 
                                         cat_col: str, val_col: str) -> List[Insight]:
-        """Finds insights by segmenting data by categories"""
+        """Finds insights by segmenting data by categories with improved logic"""
         insights = []
         
         if cat_col not in df.columns or val_col not in df.columns:
             return insights
         
         # Group statistics
-        grouped = df.groupby(cat_col)[val_col].agg(['mean', 'count', 'std'])
+        grouped = df.groupby(cat_col)[val_col].agg(['mean', 'count', 'std']).fillna(0)
         
         if len(grouped) < 2:
             return insights
         
-        # Find significant differences
+        # Check if we have meaningful variation to compare
+        unique_values = df[cat_col].nunique()
+        unique_numeric_values = df[val_col].nunique()
+        
+        # Skip comparison if there's only one unique value to compare
+        if unique_numeric_values <= 1:
+            return insights
+        
+        # For single-group scenarios (like single industry), look for interesting absolute patterns
+        if unique_values == 1:
+            # Don't generate comparison insights for single category
+            single_cat = grouped.index[0]
+            stats = grouped.iloc[0]
+            
+            # Look for interesting absolute patterns instead
+            if stats['count'] >= 10:
+                cv = stats['std'] / stats['mean'] if stats['mean'] > 0 else 0
+                
+                if cv > 0.5:  # High coefficient of variation indicates interesting spread
+                    insights.append(Insight(
+                        type=InsightType.DISTRIBUTION,
+                        title=f"High Variation Within {single_cat}",
+                        description=f"Within {cat_col} '{single_cat}', {val_col} shows high variation "
+                                   f"(coefficient of variation: {cv:.2f}). "
+                                   f"Values range widely with mean {stats['mean']:.2f} and std {stats['std']:.2f}.",
+                        importance=0.6,
+                        visual_hint="histogram",
+                        follow_up_query=f"Show me the distribution of {val_col} for {cat_col} = '{single_cat}'",
+                        supporting_data={
+                            "category": single_cat,
+                            "mean": stats['mean'],
+                            "std": stats['std'],
+                            "coefficient_variation": cv,
+                            "sample_size": stats['count']
+                        }
+                    ))
+            return insights
+        
+        # Multi-group comparison logic
         overall_mean = df[val_col].mean()
         
-        for category, stats in grouped.iterrows():
-            if stats['count'] < 5:  # Skip small groups
-                continue
+        # Find groups with sufficient sample sizes for comparison
+        valid_groups = grouped[grouped['count'] >= 5]
+        
+        if len(valid_groups) < 2:
+            return insights
+        
+        # Compare groups to each other rather than just to overall mean
+        groups_sorted = valid_groups.sort_values('mean', ascending=False)
+        
+        # Compare top vs bottom performers
+        if len(groups_sorted) >= 2:
+            top_group = groups_sorted.iloc[0]
+            bottom_group = groups_sorted.iloc[-1]
             
+            # Only create insight if there's a meaningful difference
+            if top_group.name != bottom_group.name:
+                diff_abs = top_group['mean'] - bottom_group['mean']
+                diff_pct = (diff_abs / bottom_group['mean']) * 100 if bottom_group['mean'] > 0 else 0
+                
+                # Only report if difference is substantial
+                if abs(diff_pct) > 10:  # At least 10% difference
+                    insights.append(Insight(
+                        type=InsightType.COMPARISON,
+                        title=f"Performance Gap Between {cat_col} Categories",
+                        description=f"{cat_col} '{top_group.name}' outperforms '{bottom_group.name}' by {abs(diff_pct):.1f}%. "
+                                   f"Average {val_col}: {top_group['mean']:.2f} vs {bottom_group['mean']:.2f}.",
+                        importance=min(abs(diff_pct) / 100, 0.9),
+                        visual_hint="grouped_bar_chart",
+                        follow_up_query=f"Compare {val_col} between '{top_group.name}' and '{bottom_group.name}'",
+                        supporting_data={
+                            "top_category": top_group.name,
+                            "bottom_category": bottom_group.name,
+                            "top_mean": top_group['mean'],
+                            "bottom_mean": bottom_group['mean'],
+                            "difference_pct": diff_pct,
+                            "top_sample_size": top_group['count'],
+                            "bottom_sample_size": bottom_group['count']
+                        }
+                    ))
+        
+        # Also look for outlier categories compared to overall mean
+        for category, stats in valid_groups.iterrows():
             # Calculate z-score for difference from overall mean
             if stats['std'] > 0:
                 z_score = (stats['mean'] - overall_mean) / (stats['std'] / np.sqrt(stats['count']))
                 
                 if abs(z_score) > 2:  # Significant difference
                     diff_pct = ((stats['mean'] - overall_mean) / overall_mean) * 100
-                    higher_lower = "higher" if stats['mean'] > overall_mean else "lower"
                     
-                    insights.append(Insight(
-                        type=InsightType.COMPARISON,
-                        title=f"{category} Shows Significant Difference",
-                        description=f"{cat_col}='{category}' has {abs(diff_pct):.1f}% {higher_lower} "
-                                   f"{val_col} ({stats['mean']:.2f}) compared to overall average ({overall_mean:.2f}).",
-                        importance=min(abs(z_score) / 5, 0.9),
-                        visual_hint="grouped_bar_chart",
-                        follow_up_query=f"Show me detailed breakdown for {cat_col} = '{category}'",
-                        supporting_data={
-                            "category": category,
-                            "category_mean": stats['mean'],
-                            "overall_mean": overall_mean,
-                            "z_score": z_score,
-                            "sample_size": stats['count']
-                        }
-                    ))
+                    # Only report if difference is substantial and we have multiple categories
+                    if abs(diff_pct) > 15 and len(valid_groups) > 2:
+                        higher_lower = "higher" if stats['mean'] > overall_mean else "lower"
+                        
+                        insights.append(Insight(
+                            type=InsightType.COMPARISON,
+                            title=f"{category} is an Outlier",
+                            description=f"{cat_col} '{category}' has significantly {higher_lower} "
+                                       f"{val_col} ({stats['mean']:.2f}) - {abs(diff_pct):.1f}% {higher_lower} than average ({overall_mean:.2f}).",
+                            importance=min(abs(z_score) / 5, 0.8),
+                            visual_hint="grouped_bar_chart",
+                            follow_up_query=f"Analyze what makes '{category}' different",
+                            supporting_data={
+                                "category": category,
+                                "category_mean": stats['mean'],
+                                "overall_mean": overall_mean,
+                                "z_score": z_score,
+                                "sample_size": stats['count'],
+                                "difference_pct": diff_pct
+                            }
+                        ))
         
         return insights
     

@@ -193,14 +193,60 @@ class LineageAgent(BaseAgent):
         }
     
     def _extract_filter_summary(self, sql: str) -> List[str]:
-        """Extracts summary of filters applied"""
+        """Extracts summary of filters applied with proper string handling"""
         filters = []
         
         where_match = re.search(r'WHERE\s+(.+?)(?:GROUP|ORDER|LIMIT|$)', sql, re.I | re.S)
         if where_match:
             conditions = where_match.group(1).strip()
-            # Simplified extraction
-            filters = re.split(r'\s+AND\s+', conditions, flags=re.I)
+            
+            # Split by AND/OR while preserving quoted strings
+            filters = self._smart_split_conditions(conditions)
+        
+        return filters
+    
+    def _smart_split_conditions(self, conditions: str) -> List[str]:
+        """Splits SQL conditions by AND/OR while preserving quoted strings"""
+        filters = []
+        current_filter = ""
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+        
+        while i < len(conditions):
+            char = conditions[i]
+            
+            # Handle quotes
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            
+            # Check for AND/OR outside quotes
+            if not in_single_quote and not in_double_quote:
+                # Look for AND or OR (case-insensitive)
+                remaining = conditions[i:].upper()
+                if remaining.startswith(' AND '):
+                    # Found AND outside quotes
+                    if current_filter.strip():
+                        filters.append(current_filter.strip())
+                    current_filter = ""
+                    i += 5  # Skip ' AND '
+                    continue
+                elif remaining.startswith(' OR '):
+                    # Found OR outside quotes
+                    if current_filter.strip():
+                        filters.append(current_filter.strip())
+                    current_filter = ""
+                    i += 4  # Skip ' OR '
+                    continue
+            
+            current_filter += char
+            i += 1
+        
+        # Add the last filter
+        if current_filter.strip():
+            filters.append(current_filter.strip())
         
         return filters
     

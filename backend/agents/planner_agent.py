@@ -30,6 +30,9 @@ class PlannerAgent(BaseAgent):
         super().__init__("PlannerAgent")
         self.ambiguity_patterns = self._initialize_ambiguity_patterns()
         self.intent_patterns = self._initialize_intent_patterns()
+        # Add semantic layer support
+        from services.semantic_layer_service import SemanticLayerService
+        self.semantic_layer = SemanticLayerService()
     
     async def process(self, context: AgentContext, **kwargs) -> AgentResult:
         """
@@ -141,7 +144,7 @@ class PlannerAgent(BaseAgent):
         return QueryIntent.EXPLORATION
     
     def _detect_ambiguities(self, query: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Identifies ambiguous elements in the query"""
+        """Identifies ambiguous elements in the query with enhanced detection"""
         ambiguities = []
         
         for ambiguity in self.ambiguity_patterns:
@@ -152,16 +155,51 @@ class PlannerAgent(BaseAgent):
                     ambiguities.append({
                         "type": ambiguity["type"],
                         "match": match.group(),
-                        "clarification": ambiguity["clarification"].format(match=match.group())
+                        "clarification": ambiguity["clarification"].format(match=match.group()),
+                        "confidence": 0.8
                     })
         
-        # Check for missing time context in trend queries
-        if "trend" in query.lower() and not re.search(r'\d{4}|\d{1,2}/\d{1,2}', query):
+        # Enhanced temporal ambiguity detection
+        if any(word in query.lower() for word in ["trend", "over time", "change", "growth"]) and not re.search(r'\d{4}|\d{1,2}/\d{1,2}|last \d+|past \d+', query):
             ambiguities.append({
                 "type": "temporal",
                 "match": "time period",
-                "clarification": "What time period should I analyze for the trend?"
+                "clarification": "What time period should I analyze for the trend?",
+                "confidence": 0.9,
+                "suggestions": ["last 30 days", "2024 only", "year over year", "quarterly"]
             })
+        
+        # Check for vague aggregation requests
+        if re.search(r'\b(total|sum|average)\b', query, re.I) and not re.search(r'\bby\s+\w+|group\s+by|per\s+\w+', query, re.I):
+            ambiguities.append({
+                "type": "aggregation",
+                "match": "aggregation scope",
+                "clarification": "Should I group this by a specific category or show the overall total?",
+                "confidence": 0.7,
+                "suggestions": ["by category", "by month", "by region", "overall total"]
+            })
+        
+        # Detect comparison ambiguities
+        if re.search(r'\b(compare|vs|versus|difference)\b', query, re.I) and query.count(' ') < 6:
+            ambiguities.append({
+                "type": "comparison",
+                "match": "comparison dimensions",
+                "clarification": "What specific aspects or groups should I compare?",
+                "confidence": 0.8
+            })
+        
+        # Check for missing measurement context
+        measurement_words = ['performance', 'success', 'quality', 'efficiency']
+        if any(word in query.lower() for word in measurement_words):
+            # Look for specific metrics
+            if not re.search(r'\b(revenue|sales|profit|count|rate|score|percentage)\b', query, re.I):
+                ambiguities.append({
+                    "type": "metric",
+                    "match": "measurement metric",
+                    "clarification": "Which specific metric should I use to measure this?",
+                    "confidence": 0.75,
+                    "suggestions": ["revenue", "count", "percentage", "growth rate"]
+                })
         
         return ambiguities
     
@@ -181,41 +219,71 @@ class PlannerAgent(BaseAgent):
     
     def _generate_clarifications(self, ambiguities: List[Dict[str, Any]], 
                                context: AgentContext) -> List[str]:
-        """Generates user-friendly clarification questions"""
+        """Generates user-friendly clarification questions with examples"""
         questions = []
+        
+        # Sort ambiguities by confidence (highest first)
+        ambiguities.sort(key=lambda x: x.get("confidence", 0.5), reverse=True)
         
         # Group similar ambiguities
         by_type = {}
         for amb in ambiguities:
             by_type.setdefault(amb["type"], []).append(amb)
         
-        # Generate questions by type
+        # Generate questions by type with better context
         for amb_type, items in by_type.items():
             if amb_type == "temporal":
+                # Include suggestions if available
+                suggestions = items[0].get("suggestions", ["last 30 days", "2024 only", "quarterly"])
                 questions.append(
-                    "Please specify the time period (e.g., 'last 30 days', '2024', 'January to March')"
+                    f"📅 Please specify the time period. Try: {', '.join(suggestions[:3])}"
                 )
+                
             elif amb_type == "ranking":
                 questions.append(
-                    "How many results would you like to see? (e.g., 'top 10', 'all results')"
+                    "🔢 How many results would you like? (e.g., 'top 10', 'show all', 'bottom 5')"
                 )
+                
             elif amb_type == "threshold":
                 values = [item["match"] for item in items]
                 questions.append(
-                    f"What values do you consider {' and '.join(values)}? Please provide specific thresholds."
+                    f"📊 What defines '{' and '.join(values)}' in your context? Please provide specific numbers or ranges."
                 )
+                
             elif amb_type == "metric":
+                # Look for available suggestions
+                suggestions = items[0].get("suggestions", ["revenue", "count", "percentage"])
                 questions.append(
-                    "Which specific metric should I use? (e.g., 'revenue', 'count', 'conversion rate')"
+                    f"📈 Which metric should I use? Options: {', '.join(suggestions)}"
+                )
+                
+            elif amb_type == "aggregation":
+                suggestions = items[0].get("suggestions", ["by category", "by month", "overall total"])
+                questions.append(
+                    f"📋 Should I break this down? Options: {', '.join(suggestions)}"
+                )
+                
+            elif amb_type == "comparison":
+                questions.append(
+                    "⚖️ What specific aspects should I compare? (e.g., 'this year vs last year', 'by region', 'by product')"
                 )
         
-        # Add dataset-specific clarifications
-        if not context.metadata.get("schema"):
+        # Add contextual suggestions based on query content
+        query_lower = context.query.lower()
+        
+        # If no specific ambiguities but query is very short/vague
+        if not questions and len(context.query.split()) < 4:
             questions.append(
-                "Which columns should I focus on for this analysis?"
+                "🤔 Could you be more specific? For example: 'Show me sales by region' or 'Compare revenue this year vs last year'"
             )
         
-        return questions[:3]  # Limit to 3 questions
+        # Add helpful context about available data if needed
+        if not context.metadata.get("schema") and len(questions) < 2:
+            questions.append(
+                "💡 Tip: You can ask me about trends, comparisons, totals, or specific data points in your dataset."
+            )
+        
+        return questions[:3]  # Limit to 3 questions for better UX
     
     def _extract_query_components(self, query: str) -> Dict[str, List[str]]:
         """Extracts key components from the query"""

@@ -157,8 +157,16 @@ class ExplainerAgent(BaseAgent):
         if not metric_col:
             return "The query returned results, but no numeric values were found to analyze."
         
+        # Check for data cleaning notes
+        data_notes = self._check_for_data_cleaning(analysis, context)
+        
         # Build explanation parts
         parts = []
+        
+        # Add data cleaning notice if applicable
+        if data_notes:
+            parts.append(data_notes)
+            parts.append("")
         
         # Introduction
         if dimension_col:
@@ -432,3 +440,29 @@ class ExplainerAgent(BaseAgent):
         ]
         
         return any(re.match(pattern, value) for pattern in date_patterns)
+    
+    def _check_for_data_cleaning(self, analysis: Dict[str, Any], context: AgentContext) -> Optional[str]:
+        """Checks if data cleaning occurred and returns appropriate notice"""
+        
+        columns = analysis.get("columns", [])
+        notes_columns = [col for col in columns if col.endswith('_notes')]
+        
+        if not notes_columns:
+            return None
+        
+        # Find which main column was cleaned
+        main_columns = []
+        for notes_col in notes_columns:
+            main_col = notes_col.replace('_notes', '')
+            if main_col in columns:
+                main_columns.append(main_col)
+        
+        if not main_columns:
+            return None
+        
+        # Generate appropriate message
+        if len(main_columns) == 1:
+            return f"📝 Data Note: Non-numeric values (like 'C' for confidential data) in '{main_columns[0]}' were cleaned for analysis. Original values are preserved in '{main_columns[0]}_notes'."
+        else:
+            cols_str = "', '".join(main_columns)
+            return f"📝 Data Note: Non-numeric values in columns '{cols_str}' were cleaned for analysis. Original values are preserved in corresponding '_notes' columns."

@@ -50,15 +50,15 @@ class AuthMiddleware:
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             # For demo purposes, allow unauthenticated access to certain endpoints
-            if request.url.path.startswith("/api/v1/upload"):
-                # Create a demo user for upload endpoint
+            if request.url.path.startswith("/api/v1/upload") or request.url.path.startswith("/api/v1/query"):
+                # Create a demo user for upload/query endpoints
                 request.state.user = {
                     "id": "demo-user",
                     "email": "demo@example.com",
                     "role": "user",
                     "permissions": ["read", "write"]
                 }
-                logger.info("Using demo user for upload endpoint")
+                logger.info("Using demo user for endpoint", path=request.url.path)
                 await self.app(scope, receive, send)
                 return
             
@@ -93,15 +93,15 @@ class AuthMiddleware:
                           status_code=http_ex.status_code, 
                           detail=http_ex.detail)
             
-            # For upload endpoint, use demo user as fallback
-            if request.url.path.startswith("/api/v1/upload"):
+            # For demo endpoints, use demo user as fallback
+            if request.url.path.startswith("/api/v1/upload") or request.url.path.startswith("/api/v1/query"):
                 request.state.user = {
                     "id": "demo-user",
                     "email": "demo@example.com",
                     "role": "user",
                     "permissions": ["read", "write"]
                 }
-                logger.info("Using demo user for upload endpoint after auth failure")
+                logger.info("Using demo user after auth failure", path=request.url.path)
                 await self.app(scope, receive, send)
                 return
             
@@ -109,15 +109,15 @@ class AuthMiddleware:
         except Exception as e:
             logger.error("Authentication failed", error=str(e))
             
-            # For upload endpoint, use demo user as fallback
-            if request.url.path.startswith("/api/v1/upload"):
+            # For demo endpoints, use demo user as fallback
+            if request.url.path.startswith("/api/v1/upload") or request.url.path.startswith("/api/v1/query"):
                 request.state.user = {
                     "id": "demo-user",
                     "email": "demo@example.com",
                     "role": "user",
                     "permissions": ["read", "write"]
                 }
-                logger.info("Using demo user for upload endpoint after auth error")
+                logger.info("Using demo user after auth error", path=request.url.path)
                 await self.app(scope, receive, send)
                 return
             
